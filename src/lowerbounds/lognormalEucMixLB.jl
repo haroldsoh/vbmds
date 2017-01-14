@@ -27,6 +27,7 @@ function lognormalEucMixLB(D, X, r,
           for l=1:r
               Kuu[:,:,l] = kfunc(hyp, Xu) + salt*eye(nXu)
           end
+          
       end
 
       if Kuuinv == 0
@@ -37,19 +38,23 @@ function lognormalEucMixLB(D, X, r,
       end
 
       if ki == 0
+          #println("making new Ki")
           ki = zeros(eltype(hyp),nX, nXu, r)
           for l=1:r
               for i=1:nX
                   ki[i,:,l] = kfunc(hyp, X[i,:], Xu)
               end
           end
+          #println(nX)
+          #println(r)
+          #println(ki[1,:,1])
       end
 
       if kii == 0
           kii = zeros(eltype(hyp),nX, r)
           for l=1:r
               for i=1:nX
-                  kii[i, l] = (kfunc(hyp, X[i,:]))[1]
+                  kii[i, l] = (kfunc(hyp, X[i:i,:]))[1]
               end
           end
       end
@@ -58,7 +63,7 @@ function lognormalEucMixLB(D, X, r,
           kiKuuinv = zeros(eltype(hyp),nX, nXu, r)
           for l=1:r
               for i=1:nX
-                  kiKuuinv[i,:,l] = ki[i,:,l]*Kuuinv[:,:,l]
+                  kiKuuinv[i,:,l] = ki[i,:,l]'*Kuuinv[:,:,l]
               end
           end
       end
@@ -98,8 +103,11 @@ function lognormalEucMixLB(D, X, r,
             # for the GPs
             vhatkl[i,l] = kii[i,l] - (kiKuuinv[i,:,l]*(ki[i,:,l]'))[1]
             vhatkl[i,l] = max(1e-5, vhatkl[i,l])
-            mhatkl[i,l] = (kiKuuinv[i,:,l]*m[:,l])[1]
-            kiKuuinvS[i,:,l] = kiKuuinv[i,:,l]*S[l]
+            mhatkl[i,l] = dot(kiKuuinv[i,:,l], m[:,l])
+
+            #println(size(kiKuuinv[i,:,l]))
+            #println(size(S[l]))
+            kiKuuinvS[i,:,l] = kiKuuinv[i,:,l]'*S[l]
             #kiKuuinvS[i,:,l] = kiKuuinv[i,:,l].*v[:,l]
           else
             # for the z distributions
@@ -184,8 +192,9 @@ function lognormalEucMixLB(D, X, r,
             # both GP points
             qzsign = 0.0 # indicates no qzpoint
             bkl = reshape(kiKuuinv[i,:,:] - kiKuuinv[j,:,:], nXu, r)
+
             for l=1:r
-              lambdak[l,:] = (kiKuuinvS[i,:,l] - kiKuuinvS[j,:,l])*bkl[:,l]
+              lambdak[l,:] = dot((kiKuuinvS[i,:,l] - kiKuuinvS[j,:,l]) ,bkl[:,l])
             end
 
             if return_gradient
@@ -210,7 +219,7 @@ function lognormalEucMixLB(D, X, r,
             # compute the necessary values for lambda
             bkl = reshape(kiKuuinv[gidx,:,:], nXu, r)
             for l=1:r
-              lambdak[l,:] = kiKuuinvS[gidx,:,l]*bkl[:,l]
+              lambdak[l,:] = dot(kiKuuinvS[gidx,:,l], bkl[:,l])
             end
 
             if return_gradient
@@ -313,6 +322,10 @@ function lognormalEucMixLB(D, X, r,
     end
 
     if (size(mu,1) > 0)
+      #println("test")
+      #println(size(vZ0))
+      #println(size(s2))
+      
       dklqz, dklqzgrads = DKLNormDiag(mu, s2, mZ0, vZ0; return_gradient=return_gradient)
       dkl += dklqz
     end

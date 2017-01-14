@@ -1,4 +1,5 @@
 function DKLNormDiag(mZ, vZ, mZ0, vZ0; return_gradient = false)
+  
     dkl = 0.5*( sum(vZ[:]./vZ0[:]) + sum( ((mZ0[:]- mZ[:]).^2)./vZ0[:])
         - length(mZ[:]) + sum(log(vZ0[:])) - sum(log(vZ[:])))
 

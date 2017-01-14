@@ -6,6 +6,7 @@ using MultivariateStats
 using NearestNeighbors
 import ForwardDiff
 import ReverseDiff
+#using ReverseDiff: GradientTape, GradientConfig, gradient, gradient!, compile_gradient
 #import ReverseDiffSource
 
 type VBMDSMixParams
@@ -29,6 +30,8 @@ type VBMDSMixParams
 
     init_method::AbstractString # "random" for random initialization, "mds" for MDS initialization
     mds_vn::Float64 # noise for mds method if used
+
+
 
     function VBMDSMixParams( Xu, num_lower_dim,
       lbfunc,
@@ -144,12 +147,17 @@ function VBMDSMix(D, X, nZ,
     vn_fixed = 0
     A1_fixed = 0
     dkl_fixed = 0
+
+    optHypGrad! = 0
+    #gypfunc_cfg = GradientConfig(hyp)
+
+
     # random initialization
     function randomThetaInit()
         return (
-        3*randn(nXu*r), # m
+        randn(nXu*r), # m
         min(vub-0.001, max(vlb+0.001, rand(nXu*r))), #v
-        3*randn(nZq*r ), #mu
+        randn(nZq*r ), #mu
         min(s2ub-0.001, max(s2lb+0.001, rand(nZq*r ))) #s2
         )
     end
@@ -173,11 +181,15 @@ function VBMDSMix(D, X, nZ,
     end
 
     function sigmtrans(t, lb, ub; return_gradient=false)
+        if t == []
+            return []
+        end
+        #println(t)
         denom = (1.0 + exp(-t))
         rtio = (ub - lb)./denom
         val = lb + rtio
 
-        if isa(lb, Array) 
+        if isa(lb, Array) && isa(t, Array)
             for i=1:length(val)
                 if (val[i] == ub[i])
                     val[i] -= 1.0e-7
@@ -212,6 +224,10 @@ function VBMDSMix(D, X, nZ,
 
     function invsigmtrans(s, lb, ub)
         
+        if s == []
+            return []
+        end
+
         if isa(lb,Array)
             for i=1:length(s)
                 if (s[i] == ub[i])
@@ -240,10 +256,15 @@ function VBMDSMix(D, X, nZ,
     end
 
     function paramsToTheta(m, v, mu, s2)
+        #println(mu[:])
+        #println(s2[:])
+        #println(invsigmtrans(s2[:], s2lb, s2ub))
         theta = [m[:];
         invsigmtrans(v[:], vlb, vub);
         mu[:];
         invsigmtrans(s2[:], s2lb, s2ub)]
+
+        theta = Array{Float64}(theta)
     end
 
     function gradsToTheta(dm, dv, dmu, ds2, dvtrans, ds2trans)
@@ -336,14 +357,14 @@ function VBMDSMix(D, X, nZ,
         kii_fixed = zeros(nX, r)
         for l=1:r
             for i=1:nX
-                kii_fixed[i, l] = (kfunc(hyp_fixed, Xfeat[i,:]))[1]
+                kii_fixed[i, l] = (kfunc(hyp_fixed, Xfeat[i:i,:]))[1]
             end
         end
 
         kiKuuinv_fixed = zeros(nX, nXu, r)
         for l=1:r
             for i=1:nX
-                kiKuuinv_fixed[i,:,l] = ki_fixed[i,:,l]*Kuuinv_fixed[:,:,l]
+                kiKuuinv_fixed[i,:,l] = ki_fixed[i,:,l]'*Kuuinv_fixed[:,:,l]
             end
         end
 
@@ -375,6 +396,8 @@ function VBMDSMix(D, X, nZ,
 
     function optGPGrad!(theta, storage )
         # extract parameters
+        #println(theta)
+        #println(typeof(theta))
         m,v,mu,s2,vgrad,s2grad = thetaToParams(theta, return_gradient=true)
 
         # calculate values
@@ -401,7 +424,7 @@ function VBMDSMix(D, X, nZ,
         # extract parameters
         #println(theta_hyp, " ", hyplb, " ", hypub)
         curr_hyp = sigmtrans(theta_hyp, hyplb, hypub)
-
+        #println(curr_hyp)
         # calculate values
         fval, A1, dkl, grads = lbfunc(sampleD, Xfeat, r,
             kfunc, curr_hyp, Xu,
@@ -410,13 +433,21 @@ function VBMDSMix(D, X, nZ,
             vn_fixed,
             m0, v0,
             mu0, s20)
+
+
         if return_extras
           return (fval, A1, dkl, grads)
         end
         return fval
     end
 
-
+ 
+    function optHypGrad!(theta_hyp, storage) 
+        #return goptHypFunc!(storage, theta_hyp)
+        cfg = ReverseDiff.GradientConfig(theta_hyp)
+        ReverseDiff.gradient!(storage, optHypFunc, theta_hyp, cfg)
+        return storage
+    end
 
     function optNoiseFunc(theta_vn)
       vn_local = sigmtrans(theta_vn[1], vnlb, vnub)
@@ -433,12 +464,14 @@ function VBMDSMix(D, X, nZ,
     function optimizeGP(th)
         use_custom_optimizer = false
         if !use_custom_optimizer
-            d4 = DifferentiableFunction(optGPFunc, optGPGrad!, optGPGrad!)
-            res = optimize(d4, th, opt_method,  
+            #d4 = DifferentiableFunction(optGPFunc, optGPGrad!, optGPGrad!)
+            #print("size of th in GP: ", size(th))
+            res = optimize(optGPFunc, optGPGrad!, th, opt_method,  
                 Optim.Options(f_tol = 1e-6,
                              iterations = opt_iterations,
                              store_trace = true,
-                             show_trace = false))
+                             show_trace = show_trace,
+                             autodiff = false))
             println("Number Function Calls: ", res.f_calls)
             println("Number Gradient Calls: ", res.g_calls)
             return res.minimizer
@@ -505,20 +538,38 @@ function VBMDSMix(D, X, nZ,
 
     function optimizeHyp(hypl)
             th_hyp = invsigmtrans(hypl, hyplb, hypub)
-
-            reverse_diff = true
+            #println(th_hyp)
+            reverse_diff = false
             if reverse_diff
-                res = optimize(optHypFunc, goptHypFunc, collect(th_hyp), opt_method,
+                #dhyp = DifferentiableFunction(optHypFunc, optHypGrad!, optHypGrad!)
+                #sto = similar(th_hyp)
+                #optHypGrad!(th_hyp, sto)
+                #println(sto)
+                res = optimize(optHypFunc, optHypGrad!, collect(th_hyp), opt_method,
                     Optim.Options(
-                    autodiff=true, iterations=opt_hyp_iterations,
+                    iterations=opt_hyp_iterations,
                     show_trace=show_trace, f_tol=1e-6))
+                #println(res)
                 return sigmtrans(res.minimizer, hyplb, hypub)
             else
+                # a = rand(size(th_hyp))
+                # optHypGrad!(a, th_hyp)
+                # println(norm(a))
 
-                res = optimize(optHypFunc, collect(th_hyp), opt_method,
+                #println("Grads: ", ForwardDiff.gradient(optHypFunc, th_hyp))
+                #println(collect(th_hyp))
+
+                res = optimize(optHypFunc, th_hyp, opt_method ,
                     Optim.Options(
                     autodiff=true, iterations=opt_hyp_iterations,
-                    show_trace=show_trace, f_tol=1e-6))
+                    show_trace=show_trace))
+
+                # res = optimize(optHypFunc, th_hyp, opt_method,
+                #     Optim.Options(
+                #     autodiff=true, iterations=opt_hyp_iterations,
+                #     show_trace=show_trace))
+                #println(res)
+                #println(res.minimizer)
                 return sigmtrans(res.minimizer, hyplb, hypub)
             end
     
@@ -623,17 +674,22 @@ function VBMDSMix(D, X, nZ,
         end
         for l=1:r
             for i=1:nX
-                kii[i, l] = (kfunc(hyp, X[i,:]))[1]
-                ki[i,:,l] = kfunc(hyp, X[i,:], Xu)
-                kiKuuinv[i,:,l] = ki[i,:,l]*Kuuinv[:,:,l]
+                kii[i, l] = (kfunc(hyp, X[i:i,:]))[1]
+                ki[i,:,l] = kfunc(hyp, X[i:i,:], Xu)
+                kiKuuinv[i,:,l] = ki[i,:,l]'*Kuuinv[:,:,l]
                 #vhatkl[i,l] = kii[i,l] - (kiKuuinv[i,:,l]*(ki[i,:,l]'))[1]#(kiKuuinv[i,:,l]*diagm(v[:,l])*(kiKuuinv[i,:,l]'))[1]
-                vhatkl[i,l] = kii[i,l] + (kiKuuinv[i,:,l]*diagm(v[:,l])*(kiKuuinv[i,:,l]'))[1]
+                vhatkl[i,l] = kii[i,l] + dot((kiKuuinv[i,:,l]'*diagm(v[:,l])), kiKuuinv[i,:,l])
                 vhatkl[i,l] -= (kiKuuinv[i,:,l]*(ki[i,:,l]'))[1]
-                mhatkl[i,l] = (kiKuuinv[i,:,l]*m[:,l])[1]
+                mhatkl[i,l] = dot(kiKuuinv[i,:,l], m[:,l])
             end
         end
         return (mhatkl, vhatkl)
     end
+
+
+    # ======================
+    # main function 
+    # ======================
 
     if D == 0
         # prediction mode
@@ -655,6 +711,7 @@ function VBMDSMix(D, X, nZ,
         #theta_init = vec([ eta1; eta2])
         println("Creating Parameters")
         theta_init = paramsToTheta(m, v, mu, s2)
+
         m0, v0, mu0, s20 = initPriors()
 
         # Do Learning (Optimization)
@@ -665,6 +722,11 @@ function VBMDSMix(D, X, nZ,
         (Kuu_fixed, Kuuinv_fixed, ki_fixed, kii_fixed, kiKuuinv_fixed) = setupFixedKernelVars(hyp_init)
         #println(Kuu_fixed)
         # println("Learning")
+
+        #sampleD = D
+        #optHypGrad! = ReverseDiff.compile_gradient(optHypFunc, hyp_init)
+
+
         theta_opt, vn_opt, hyp_opt = learn(theta_init, vn_init, hyp_init)
 
         # generate new parameters
