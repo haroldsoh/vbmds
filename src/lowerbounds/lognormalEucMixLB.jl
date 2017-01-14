@@ -137,6 +137,7 @@ function lognormalEucMixLB(D, X, r,
     A1 = 0.0
     lambdak = zeros(vartype,r,1)
     #println("looping through data")
+    betak = zeros(1,size(mhatkl)[2])
     for k=1:nD
         dk = D[k,3]
 
@@ -144,7 +145,10 @@ function lognormalEucMixLB(D, X, r,
         j = Int(D[k,2])
 
         betak = mhatkl[i,:] - mhatkl[j,:]
-        betak = betak'
+
+        #println(size(betak))
+        #betak = betak'
+        #println(size(betak))
         Sigmak = Diagonal(vec(vhatkl[i,:] + vhatkl[j,:]))
 
         mk = 0.0;
@@ -152,6 +156,9 @@ function lognormalEucMixLB(D, X, r,
         if (i > nX && j > nX)
           # both q(Z) points
           mk = betak'*betak + trace(Sigmak)
+          #println(size(betak))
+          #println(size(Sigmak))
+          
           sk = 4*betak'*Sigmak*betak + 2*trace(Sigmak.^2)
 
           # derivatives
@@ -264,10 +271,11 @@ function lognormalEucMixLB(D, X, r,
           end #end gradient computations
         end # end points, GP only, mixed block selection
 
-        logdk = log(dk)
-        logmk = log(mk)
-
-        A1 += (logdk - logmk/2)^2 + sk*(2*logdk - logmk+1)/(2*mk^2)
+        logdk = log(dk)[1]
+        logmk = log(mk)[1]
+        sk = sk[1]
+        mk = mk[1]
+        A1 += (logdk - logmk/2).^2 + sk*(2*logdk - logmk+1)/(2*mk.^2)
 
         # for returning derivaties
         if return_gradient
@@ -275,11 +283,11 @@ function lognormalEucMixLB(D, X, r,
           dA1dsk = ((1 + 2*logdk - logmk)/(2*(mk^2)))[1]
 
           if (i > nX && j > nX)
-            dA1dmu[i-nX,:] += (dA1dmk*dmkdmui + dA1dsk*dskdmui)'
-            dA1dmu[j-nX,:] += (dA1dmk*dmkdmuj  + dA1dsk*dskdmuj)'
+            dA1dmu[i-nX,:] += (dA1dmk*dmkdmui + dA1dsk*dskdmui)
+            dA1dmu[j-nX,:] += (dA1dmk*dmkdmuj  + dA1dsk*dskdmuj)
 
-            dA1ds2[i-nX,:] += (dA1dmk + dA1dsk*dskds2i)'
-            dA1ds2[j-nX,:] += (dA1dmk + dA1dsk*dskds2j)'
+            dA1ds2[i-nX,:] += (dA1dmk + dA1dsk*dskds2i)
+            dA1ds2[j-nX,:] += (dA1dmk + dA1dsk*dskds2j)
 
           elseif (i <= nX && j <= nX)
             dA1dm += dA1dmk*dmkdm + dA1dsk*dskdm
@@ -288,8 +296,8 @@ function lognormalEucMixLB(D, X, r,
             dA1dm += dA1dmk*dmkdm + dA1dsk*dskdm
             dA1dv += dA1dmk*dmkdv + dA1dsk*dskdv
 
-            dA1dmu[qidx-nX,:] += (dA1dmk*dmkdmu + dA1dsk*dskdmu)'
-            dA1ds2[qidx-nX,:] += (dA1dmk + dA1dsk*dskds2)'
+            dA1dmu[qidx-nX,:] += (dA1dmk*dmkdmu + dA1dsk*dskdmu)
+            dA1ds2[qidx-nX,:] += (dA1dmk + dA1dsk*dskds2)
           end
         end
     end

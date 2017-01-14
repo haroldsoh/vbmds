@@ -5,14 +5,15 @@ import Base.copy
 using MultivariateStats
 using NearestNeighbors
 import ForwardDiff
+import ReverseDiff
 #import ReverseDiffSource
 
 type VBMDSMixParams
     Xu # inducing input locations
-    num_lower_dim::Number # dimensions
+    num_lower_dim::Int # dimensions
     lbfunc::Function
     kfunc::Function # kernel function
-    hyp::Array{Float64} # hyperparameters
+    hyp #::Array{Float64} # hyperparameters
     m::Array{Float64} # mean of inducing variables (set to 0 if you want auto init)
     v::Array{Float64} # diagonal of inducing variables (set to 0 if you want auto init)
     mu::Array{Float64} # mean of z's
@@ -87,7 +88,7 @@ end
 
 function VBMDSMix(D, X, nZ,
   params::VBMDSMixParams;
-  opt_method = :cg,
+  opt_method = LBFGS(),
   sample_size = 0,
   num_iterations=5,
   opt_iterations=2,
@@ -175,11 +176,32 @@ function VBMDSMix(D, X, nZ,
         denom = (1.0 + exp(-t))
         rtio = (ub - lb)./denom
         val = lb + rtio
-        if (val == ub)
-            val -= 1.0e-7
-        elseif val == lb
-            val += 1.0e-7
+
+        if isa(lb, Array) 
+            for i=1:length(val)
+                if (val[i] == ub[i])
+                    val[i] -= 1.0e-7
+                elseif (val[i] == lb[i])
+                    val[i] += 1.0e-7
+                end
+            end
+        elseif isa(t, Array)
+            for i=1:length(val)
+                if (val[i] == ub)
+                    val[i] -= 1.0e-7
+                elseif (val[i] == lb)
+                    val[i] += 1.0e-7
+                end
+            end
+        else 
+            if (val == ub)
+                val -= 1.0e-7
+            elseif val == lb
+                val += 1.0e-7
+            end            
         end
+
+
         grad = ()
         if return_gradient
           grad = (denom - 1.0).*rtio./denom
@@ -189,11 +211,31 @@ function VBMDSMix(D, X, nZ,
     end
 
     function invsigmtrans(s, lb, ub)
-        if (s == ub)
-            s -= 1.0e-7
-        elseif s == lb
-            s += 1.0e-7
+        
+        if isa(lb,Array)
+            for i=1:length(s)
+                if (s[i] == ub[i])
+                    s[i] -= 1.0e-7
+                elseif s[i] == lb[i]
+                    s[i] += 1.0e-7
+                end
+            end
+        elseif isa(s, Array)
+            for i=1:length(s)
+                if (s[i] == ub)
+                    s[i] -= 1.0e-7
+                elseif s[i] == lb
+                    s[i] += 1.0e-7
+                end
+            end
+        else 
+            if (s == ub)
+                s -= 1.0e-7
+            elseif s == lb
+                s += 1.0e-7
+            end
         end
+
         return -log(((ub - lb)./(s - lb)) - 1.0 )
     end
 
@@ -212,7 +254,7 @@ function VBMDSMix(D, X, nZ,
     end
 
     function thetaToParams(theta; return_gradient=false)
-        if nXu > 0
+        if nXu > 0            
             th1 = theta[1:2*nXu*r]
             m = reshape(th1[1:nXu*r], nXu, r)
             v = reshape(th1[(nXu*r+1):end], nXu, r)
@@ -310,6 +352,7 @@ function VBMDSMix(D, X, nZ,
 
     function optGPFunc(theta; return_extras = false)
         # extract parameters
+        #println(theta)
         m,v,mu,s2 = thetaToParams(theta)
 
         # calculate values
@@ -391,11 +434,14 @@ function VBMDSMix(D, X, nZ,
         use_custom_optimizer = false
         if !use_custom_optimizer
             d4 = DifferentiableFunction(optGPFunc, optGPGrad!, optGPGrad!)
-            res = optimize(d4, th, method =opt_method,  iterations=opt_iterations,
-            show_trace=show_trace, ftol=1e-6)
+            res = optimize(d4, th, opt_method,  
+                Optim.Options(f_tol = 1e-6,
+                             iterations = opt_iterations,
+                             store_trace = true,
+                             show_trace = false))
             println("Number Function Calls: ", res.f_calls)
             println("Number Gradient Calls: ", res.g_calls)
-            return res.minimum
+            return res.minimizer
         else
             theta = th
             df = zeros(size(theta))
@@ -443,31 +489,50 @@ function VBMDSMix(D, X, nZ,
     end
 
     function optimizeNoise(vnl)
-      try
+      # try
         th_vn = invsigmtrans(vnl, vnlb, vnub)
-        res = optimize(optNoiseFunc, collect(th_vn), method=opt_method,
-        autodiff=true, iterations=opt_vn_iterations,
-        show_trace=show_trace, ftol=1e-6)
-        return sigmtrans(res.minimum[1], vnlb, vnub)
-      catch err
-        println("Noise optimization failed.")
-        println(err)
-        return vn_init
-      end
+        res = optimize(optNoiseFunc, collect(th_vn), opt_method,
+            Optim.Options(
+                autodiff=true, iterations=opt_hyp_iterations,
+                show_trace=show_trace, f_tol=1e-6))
+        return sigmtrans(res.minimizer[1], vnlb, vnub)
+      # catch err
+      #   println("Noise optimization failed.")
+      #   println(err)
+      #   return vn_init
+      # end
     end
 
     function optimizeHyp(hypl)
-        try
             th_hyp = invsigmtrans(hypl, hyplb, hypub)
-            res = optimize(optHypFunc, collect(th_hyp), method=opt_method,
-            autodiff=true, iterations=opt_hyp_iterations,
-            show_trace=show_trace, ftol=1e-6)
-            return sigmtrans(res.minimum, hyplb, hypub)
-        catch err
-            println("Hyperparameter optimization failed.")
-            println(err)
-            return hyp_init
-        end
+
+            reverse_diff = true
+            if reverse_diff
+                res = optimize(optHypFunc, goptHypFunc, collect(th_hyp), opt_method,
+                    Optim.Options(
+                    autodiff=true, iterations=opt_hyp_iterations,
+                    show_trace=show_trace, f_tol=1e-6))
+                return sigmtrans(res.minimizer, hyplb, hypub)
+            else
+
+                res = optimize(optHypFunc, collect(th_hyp), opt_method,
+                    Optim.Options(
+                    autodiff=true, iterations=opt_hyp_iterations,
+                    show_trace=show_trace, f_tol=1e-6))
+                return sigmtrans(res.minimizer, hyplb, hypub)
+            end
+    
+        # try
+        #     th_hyp = invsigmtrans(hypl, hyplb, hypub)
+        #     res = optimize(optHypFunc, collect(th_hyp), method=opt_method,
+        #     autodiff=true, iterations=opt_hyp_iterations,
+        #     show_trace=show_trace, ftol=1e-6)
+        #     return sigmtrans(res.minimum, hyplb, hypub)
+        # catch err
+        #     println("Hyperparameter optimization failed.")
+        #     println(err)
+        #     return hyp_init
+        # end
     end
 
     function learn(theta, vn, hyp)
@@ -491,6 +556,7 @@ function VBMDSMix(D, X, nZ,
                 end
                 prev_th = curr_th
                 curr_th = optimizeGP(curr_th)
+                #println(curr_th)
                 if (norm(prev_th - curr_th) < 1e-8)
                     println("Norm < 1e-8. Early finish.")
                     break;
@@ -500,6 +566,7 @@ function VBMDSMix(D, X, nZ,
             # show validation error
             #sampleD = Dlocal[rand(1:nD, sample_size), :]
             sampleD = Dlocal
+            #println(curr_th)
             fval, A1_fixed, dkl_fixed = optGPFunc(curr_th; return_extras = true)
 
             # fix the required values
@@ -515,14 +582,18 @@ function VBMDSMix(D, X, nZ,
                         println("Creating new kernel matrices with hyp: ", curr_hyp)
                         (Kuu_fixed, Kuuinv_fixed, ki_fixed, kii_fixed, kiKuuinv_fixed) = setupFixedKernelVars(curr_hyp)
                     end
-                    println("Curr hyp: ", curr_hyp)
+                    if show_trace
+                        println("Curr hyp: ", curr_hyp)
+                    end
                 end
 
                 # optimize noise
                 if !fixed_noise
                     hyp_fixed = curr_hyp
                     curr_vn = optimizeNoise(curr_vn)
-                    println("Curr vn: ", curr_vn)
+                    if show_trace
+                        println("Curr vn: ", curr_vn)
+                    end
                 end
             end
 
