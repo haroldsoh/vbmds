@@ -21,6 +21,10 @@ function seARDkernel(params, x, X)
 end
 
 
+function softplus(x)
+    return log(1.0 + exp(x))
+end
+
 function seNNkernel(params, X)
     W = params[1:end-1]
     nD = Int(sqrt(length(W)))
@@ -33,7 +37,8 @@ function seNNkernel(params, X)
     for i=1:nX
         for j=1:nX
             #K[i,j] = exp(-sum((( tanh(W*X[i,:]) - tanh(W*X[j,:]) ).^2)./ls))[1]
-            K[i,j] = exp(-sum((( W*X[i,:] - W*X[j,:] ).^2)./ls))[1]
+            #K[i,j] = exp(-sum((( softplus(W*X[i,:]) - softplus(W*X[j,:]) ).^2)./ls))[1]
+            K[i,j] = exp(-sum((( (W*X[i,:]) - (W*X[j,:]) ).^2)./ls))[1]
         end
     end
     return K
@@ -50,7 +55,8 @@ function seNNkernel(params, x, X)
     #println(x)
     for j=1:nX
         #K[1,j] = exp(-sum(((  tanh(W*x[:]) - tanh(W*X[j,:]) ).^2)./ls))[1]
-        K[1,j] = exp(-sum(((  W*x[:] - W*X[j,:] ).^2)./ls))[1]
+        #K[1,j] = exp(-sum(((  softplus(W*x[:]) - softplus(W*X[j,:]) ).^2)./ls))[1]
+        K[1,j] = exp(-sum(((  (W*x[:]) - (W*X[j,:]) ).^2)./ls))[1]
     end
     return K
 end
